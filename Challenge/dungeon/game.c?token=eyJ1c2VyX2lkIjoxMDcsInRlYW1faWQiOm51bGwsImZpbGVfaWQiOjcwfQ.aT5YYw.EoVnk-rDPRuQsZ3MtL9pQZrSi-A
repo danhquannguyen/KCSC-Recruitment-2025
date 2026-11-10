@@ -1,0 +1,445 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <stdint.h>
+
+#include "game.h"
+
+Weapon Inventory[INVENTORY_SIZE] = {0};
+uint8_t inventory_count = 0;
+uint8_t current_floor = 0;
+int coin = 70000;
+Player player = {0};
+char default_name[BUF_LEN] = "DragonSlayer";
+
+static Class classes[CLASS_COUNT] = {
+    { "Swordsman", "Shockwave Blast", 18000, 2500, 1500 },
+    { "Ranger",    "Sky Crush",       15000, 2800, 1000 },
+    { "Priest",    "Ray of Frost",    16000, 2200, 1400 },
+    { "Knight",    "Harsh Stomp",     20000, 2300, 2000 }
+};
+
+static Monster monsters[MAX_MONSTERS] = {
+    { "Illfang the Kobold Lord",    "Crimson Fang Barrage",    15000,  4000,  1500 },
+    { "Asterius the Taurus King",   "Titan's Rampage",         22000,  5500,  2500 },
+    { "Nerius the Evil Treant",     "Verdant Doom Vines",      30000,  7000,  3500 },
+    { "Wythege the Hippocampus",    "Abyssal Tidal Roar",      38000,  8500,  4500 },
+    { "Fuscus the Vacant Colossus", "Starfall Earthbreaker",   48000, 10000,  5500 },
+    { "The Irrational Cube",        "Chaotic Dimension Crush", 60000, 12000,  6500 },
+    { "Aghyellr the Igneous Wyrm",  "Magma Cataclysm",         75000, 14000,  8000 },
+    { "Kagachi the Samurai Lord",   "Moonlit Iaido Dance",     95000, 17000, 10000 },
+    { "The Storm Griffin",          "Tempest Sky Rend",       120000, 20000, 13000 },
+    { "The Strict Hermit",          "Void Sermon",            150000, 24000, 16000 }
+};
+
+static Weapon shop_weapons[SHOP_WEAPON_COUNT] = {
+    { "Holy Sword Excalibur",      3000},
+    { "Blue Rose Sword",           4500},
+    { "Elucidator",                6000},
+    { "Starship Metal Estoc",      8000},
+    { "Lightning Hammer Mjolnir", 10000},
+    { "Crest of Yggdrasil",       12000},
+    { "Fragrant Olive Sword",     15000},
+    { "Night Sky Sword",          18000},
+    { "Kagemitsu G4",             22000},
+    { "Mate Chopper",             26000}
+};
+
+void read_str(char* buf, uint32_t len) 
+{
+    if (len == 0) return;
+
+    ssize_t n = read(0, buf, len - 1);
+    if (n <= 0) {
+        perror("read");
+        exit(1);
+    }
+
+    if (buf[n - 1] == '\n')
+        buf[n - 1] = '\0';
+    else
+        buf[n] = '\0';
+}
+
+int read_num()
+{
+    char buf[16];
+    read_str(buf, sizeof(buf));
+    return atoi(buf);
+}
+
+void init_player()
+{
+    int choice;
+
+    puts("Choose your class:");
+    for (int i = 0; i < CLASS_COUNT; i++) 
+    {
+        Class *c = &classes[i];
+        printf("%d) %s - HP: %d, ATK: %d, DEF: %d, Skill: %s\n",
+               i + 1, c->name, c->health, c->attack, c->defense, c->skill);
+    }
+    printf(">> ");
+    while (1) 
+    {
+        choice = read_num();
+        if (choice >= 1 && choice <= CLASS_COUNT)
+            break;
+        printf("Invalid choice, choose again: ");
+    }
+
+    Class *type = &classes[choice - 1];
+
+    printf("\nDo you want to set a name for your character? (1 = Yes, 0 = No): ");
+    int custom = read_num();
+
+    if (custom == 1)
+    {
+        player.name = (char *)malloc(BUF_LEN);
+        if (!player.name) {
+            perror("malloc");
+            exit(1);
+        }
+        printf("Enter your name: ");
+        read_str(player.name, BUF_LEN);
+    } 
+    else 
+    {
+        player.name = default_name;
+        printf("Using default name: %s\n", player.name);
+    }
+
+    player.type        = type->name;
+    player.skill       = type->skill;
+    player.max_hp      = type->health;
+    player.hp          = type->health;
+    player.base_attack = type->attack;
+    player.defense     = type->defense;
+
+    printf("Welcome, %s the %s!\n", player.name, type->name);
+    printf("Your skill: %s\n", player.skill);
+}
+
+void setup()
+{
+    setvbuf(stdin,  NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    init_player();
+}
+
+void show_status()
+{
+    printf("\n=== STATUS ===\n");
+    printf("Name     : %s\n", player.name);
+    printf("Class    : %s\n", player.type);
+    printf("Skill    : %s\n", player.skill);
+    printf("Floor    : %d / %d\n", current_floor + 1, MAX_MONSTERS);
+    printf("HP       : %d / %d\n", player.hp, player.max_hp);
+    printf("Base ATK : %d\n", player.base_attack);
+    printf("DEF      : %d\n", player.defense);
+    printf("Gold     : %d\n", coin);
+    printf("Weapons  : %d\n", inventory_count);
+}
+
+void buy_weapons()
+{
+    while (1) 
+    {
+        printf("\n=== WEAPON SHOP ===\n");
+        for (int i = 0; i < SHOP_WEAPON_COUNT; i++) 
+        {
+            printf("%d) %s (ATK %d, %d gold)\n",
+                   i + 1,
+                   shop_weapons[i].name,
+                   shop_weapons[i].attack,
+                   shop_weapons[i].attack*2);
+        }
+        puts("0) Back");
+        printf("Gold: %d\n", coin);
+        printf("Choose weapon: ");
+
+        int choice = read_num();
+        if (choice == 0)
+            return;
+
+        if (choice < 1 || choice > SHOP_WEAPON_COUNT)
+        {
+            puts("Invalid choice.");
+            continue;
+        }
+
+        if (inventory_count >= INVENTORY_SIZE)
+        {
+            puts("Inventory is full!");
+            return;
+        }
+
+        Weapon *sw = &shop_weapons[choice - 1];
+        int price = sw->attack *2;
+        if (coin < price)
+        {
+            puts("Not enough gold.");
+            continue;
+        }
+
+        Weapon *w = &Inventory[inventory_count];
+        memset(w, 0, sizeof(Weapon));
+        strncpy(w->name, sw->name, BUF_LEN);
+        w->name[BUF_LEN - 1] = '\0';
+        w->attack = sw->attack;
+
+        coin -= price;
+        inventory_count++;
+
+        printf("You bought %s!\n", w->name);
+    }
+}
+
+void sell_weapon()
+{
+    char buf[BUF_LEN];
+
+    printf("\nEnter weapon name to sell: ");
+    read_str(buf, sizeof(buf));
+
+    for (int i = 0; i <= inventory_count; i++)
+    {
+        if (!strcmp(Inventory[i].name, buf))
+        {
+            coin += Inventory[i].attack;
+            printf("You sold %s for %d gold.\n", Inventory[i].name, Inventory[i].attack);
+
+            for (int j = i; j < (int)(inventory_count - 1); j++)
+            {
+                Inventory[j] = Inventory[j + 1];
+            }
+
+            memset(&Inventory[inventory_count - 1], 0, sizeof(Inventory[0]));
+            inventory_count--;
+            return;
+        }
+    }
+
+    puts("You don't have that weapon.");
+}
+
+void enhance_weapons()
+{
+    if (inventory_count == 0) {
+        puts("You have no weapons to enhance.");
+        return;
+    }
+
+    printf("\nChoose weapon in your inventory to enhance (0 to cancel): ");
+    int choice = read_num();
+    if (choice == 0)
+        return;
+
+    if (choice < 1 || choice > inventory_count) {
+        puts("Invalid choice.");
+        return;
+    }
+
+    Weapon *w = &Inventory[choice - 1];
+
+    printf("Your gold: %d\n", coin);
+    printf("How much gold do you want to spend on %s? (1 gold = +1 ATK): ",
+           w->name);
+    int spend = read_num();
+
+    if (spend <= 0) {
+        puts("Canceled.");
+        return;
+    }
+
+    if (spend > coin)
+    {
+        puts("You don't have that much gold.");
+        return;
+    }
+
+    coin -= spend;
+    w->attack += spend;
+
+    printf("Enhanced %s! New ATK = %d (spent %d gold).\n",
+           w->name, w->attack, spend);
+}
+
+void win()
+{
+    puts("\n*** You have beaten the game! ***");
+}
+
+void explore_dungeon()
+{
+    Monster *m = &monsters[current_floor];
+
+    printf("\n=== DUNGEON FLOOR %d ===\n", current_floor + 1);
+    printf("You encounter a %s! (HP %d, ATK %d, DEF %d, Skill: %s)\n",
+           m->name, m->health, m->attack, m->defense, m->skill);
+
+    int weapon_atk = 0;
+
+    if (inventory_count == 0)
+        puts("You have no weapons. You fight with your bare hands!");
+    else 
+    {
+        printf("\nChoose your weapon for this battle:\n");
+        for (int i = 0; i < inventory_count; i++)
+        {
+            printf("%d) %s (ATK %d)\n",
+                   i + 1,
+                   Inventory[i].name,
+                   Inventory[i].attack);
+        }
+        puts("0) Fight without weapon");
+
+        printf(">> ");
+        int idx = read_num();
+
+        if (idx == 0)
+            puts("You chose to fight without a weapon.");
+        else if (idx < 0 || idx > inventory_count)
+            puts("Invalid choice. You fight without a weapon.");
+        else
+        {
+            Weapon *w = &Inventory[idx - 1];
+            weapon_atk = w->attack;
+            printf("You wield %s (ATK %d).\n", w->name, w->attack);
+        }
+    }
+
+    int monster_hp = m->health;
+    int atk        = player.base_attack + weapon_atk;
+
+    printf("Your total ATK this battle: %d (Base %d + Weapon %d)\n",
+           atk, player.base_attack, weapon_atk);
+    printf("Your skill: %s\n", player.skill);
+
+    int dmg_to_monster = atk - m->defense;
+    if (dmg_to_monster < 1) dmg_to_monster = 1;
+
+    while (monster_hp > 0 && player.hp > 0)
+    {
+        monster_hp -= dmg_to_monster;
+        printf("You hit %s for %d damage. Monster HP = %d\n",
+               m->name, dmg_to_monster, monster_hp);
+
+        if (monster_hp <= 0)
+            break;
+
+        int dmg_to_player = m->attack - player.defense;
+        if (dmg_to_player < 1) dmg_to_player = 1;
+
+        player.hp -= dmg_to_player;
+        printf("%s uses %s and hits you for %d damage. Your HP = %d\n",
+               m->name, m->skill, dmg_to_player, player.hp);
+    }
+
+    if (player.hp > 0)
+    {
+        int reward = 8000 + current_floor * 3000;
+        printf("You defeated %s!\n", m->name);
+        printf("You gained %d gold.\n", reward);
+        coin += reward;
+        current_floor++;
+
+        if (current_floor >= MAX_MONSTERS)
+        {
+            win();
+            exit(0);
+        } 
+        else
+            printf("You advance to floor %d.\n", current_floor + 1);
+
+        if (player.hp < player.max_hp)
+        {
+            int heal = player.max_hp / 3;
+            if (heal < 1) heal = 1;
+            player.hp += heal;
+            if (player.hp > player.max_hp)
+                player.hp = player.max_hp;
+            printf("You recover %d HP. Current HP: %d / %d\n",
+                   heal, player.hp, player.max_hp);
+        }
+    }
+    else
+    {
+        printf("You were defeated by %s...\n", m->name);
+        printf("You wake up at town.\n");
+        player.hp = player.max_hp;
+    }
+}
+
+void edit_info()
+{
+    puts("\n=== EDIT NAME ===");
+
+    printf("Current name: %s\n", player.name);
+    printf("Do you want to change your name? (1 = yes, 0 = no): ");
+
+    int choice = read_num();
+    if (choice != 1)
+    {
+        puts("Name unchanged.");
+        return;
+    }
+
+    printf("Enter new name: ");
+    read_str(player.name, BUF_LEN);
+}
+
+void menu()
+{
+    puts("");
+    puts("===== MENU =====");
+    puts("1. Explore the dungeon");
+    puts("2. Buy weapons");
+    puts("3. Sell weapons");
+    puts("4. Enhance weapons");
+    puts("5. Show status");
+    puts("6. Edit info");
+    puts("0. Exit");
+    printf(">> ");
+}
+
+int main()
+{
+    setup();
+    int choice;
+
+    while (1)
+    {
+        menu();
+        choice = read_num();
+        switch (choice)
+        {
+            case 1:
+                explore_dungeon();
+                break;
+            case 2:
+                buy_weapons();
+                break;
+            case 3:
+                sell_weapon();
+                break;
+            case 4:
+                enhance_weapons();
+                break;
+            case 5:
+                show_status();
+                break;
+            case 6:
+                edit_info();
+                break;
+            case 0:
+                puts("Goodbye!");
+                exit(0);
+            default:
+                puts("Invalid choice!");
+                break;
+        }
+    }
+}
